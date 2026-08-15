@@ -21,6 +21,8 @@ enum_number! {
         RoleSelect = 6,
         MentionableSelect = 7,
         ChannelSelect = 8,
+        Label = 18,
+        FileUpload = 19,
         _ => Unknown(u8),
     }
 }
@@ -67,8 +69,8 @@ impl<'de> Deserialize<'de> for ActionRowComponent {
             | ComponentType::RoleSelect
             | ComponentType::MentionableSelect
             | ComponentType::ChannelSelect => from_value(value).map(ActionRowComponent::SelectMenu),
-            ComponentType::ActionRow => {
-                return Err(DeError::custom("Invalid component type ActionRow"))
+            ComponentType::ActionRow | ComponentType::Label | ComponentType::FileUpload => {
+                return Err(DeError::custom("Invalid component type in action row"))
             },
             ComponentType::Unknown(i) => {
                 return Err(DeError::custom(format_args!("Unknown component type {i}")))
@@ -290,6 +292,72 @@ pub struct InputText {
     /// Custom placeholder text if the input is empty; max 100 characters
     #[serde(skip_serializing_if = "Option::is_none")]
     pub placeholder: Option<String>,
+}
+
+/// A layout component that wraps an input component in a modal.
+///
+/// The `label` and `description` used to create the modal are not included in modal submissions.
+///
+/// [Discord docs](https://docs.discord.com/developers/components/reference#label-label-interaction-response-structure).
+#[cfg_attr(feature = "typesize", derive(typesize::derive::TypeSize))]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[non_exhaustive]
+pub struct Label {
+    /// Always [`ComponentType::Label`].
+    #[serde(rename = "type")]
+    pub kind: ComponentType,
+    /// The input component contained by the label.
+    pub component: LabelComponent,
+}
+
+/// A component contained by a [`Label`] in a modal submission.
+#[cfg_attr(feature = "typesize", derive(typesize::derive::TypeSize))]
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub enum LabelComponent {
+    InputText(InputText),
+    FileUpload(FileUpload),
+}
+
+impl<'de> Deserialize<'de> for LabelComponent {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        let map = JsonMap::deserialize(deserializer)?;
+        let raw_kind = map.get("type").ok_or_else(|| DeError::missing_field("type"))?.clone();
+        let value = Value::from(map);
+
+        match deserialize_val(raw_kind)? {
+            ComponentType::InputText => from_value(value).map(Self::InputText),
+            ComponentType::FileUpload => from_value(value).map(Self::FileUpload),
+            ComponentType::Unknown(i) => {
+                return Err(DeError::custom(format_args!("Unknown label component type {i}")))
+            },
+            kind => return Err(DeError::custom(format_args!("Invalid label component {kind:?}"))),
+        }
+        .map_err(DeError::custom)
+    }
+}
+
+impl Serialize for LabelComponent {
+    fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        match self {
+            Self::InputText(component) => component.serialize(serializer),
+            Self::FileUpload(component) => component.serialize(serializer),
+        }
+    }
+}
+
+/// An interactive component that allows users to upload files in a modal.
+#[cfg_attr(feature = "typesize", derive(typesize::derive::TypeSize))]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[non_exhaustive]
+pub struct FileUpload {
+    /// Always [`ComponentType::FileUpload`].
+    #[serde(rename = "type")]
+    pub kind: ComponentType,
+    /// Developer-defined identifier for the file upload.
+    pub custom_id: String,
+    /// IDs of the uploaded files found in [`ModalInteractionData::resolved`].
+    pub values: Vec<AttachmentId>,
 }
 
 enum_number! {

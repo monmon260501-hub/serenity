@@ -31,6 +31,98 @@ impl serde::Serialize for CreateActionRow {
     }
 }
 
+/// A builder for creating a label, a top-level modal component that wraps an input component.
+///
+/// [Discord docs](https://docs.discord.com/developers/components/reference#label).
+#[derive(Clone, Debug, Serialize)]
+#[must_use]
+pub struct CreateLabel {
+    #[serde(rename = "type")]
+    kind: ComponentType,
+    label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
+    component: CreateLabelComponent,
+}
+
+impl CreateLabel {
+    /// Creates a label containing a file upload component.
+    pub fn file_upload(label: impl Into<String>, file_upload: CreateFileUpload) -> Self {
+        Self {
+            kind: ComponentType::Label,
+            label: label.into(),
+            description: None,
+            component: CreateLabelComponent::FileUpload(file_upload),
+        }
+    }
+
+    /// Sets the description displayed with the label.
+    pub fn description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(untagged)]
+enum CreateLabelComponent {
+    FileUpload(CreateFileUpload),
+}
+
+/// A builder for creating a file upload inside a modal label.
+///
+/// [Discord docs](https://docs.discord.com/developers/components/reference#file-upload).
+#[derive(Clone, Debug, Serialize)]
+#[must_use]
+pub struct CreateFileUpload {
+    #[serde(rename = "type")]
+    kind: ComponentType,
+    custom_id: String,
+    min_values: u8,
+    max_values: u8,
+    required: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    file_types: Vec<String>,
+}
+
+impl CreateFileUpload {
+    /// Creates a required single-file upload with the given custom id.
+    pub fn new(custom_id: impl Into<String>) -> Self {
+        Self {
+            kind: ComponentType::FileUpload,
+            custom_id: custom_id.into(),
+            min_values: 1,
+            max_values: 1,
+            required: true,
+            file_types: Vec::new(),
+        }
+    }
+
+    /// Sets the minimum number of files that must be uploaded.
+    pub fn min_values(mut self, min_values: u8) -> Self {
+        self.min_values = min_values;
+        self
+    }
+
+    /// Sets the maximum number of files that may be uploaded.
+    pub fn max_values(mut self, max_values: u8) -> Self {
+        self.max_values = max_values;
+        self
+    }
+
+    /// Sets whether at least one file is required.
+    pub fn required(mut self, required: bool) -> Self {
+        self.required = required;
+        self
+    }
+
+    /// Sets the file types accepted by Discord's file picker.
+    pub fn file_types(mut self, file_types: Vec<String>) -> Self {
+        self.file_types = file_types;
+        self
+    }
+}
+
 /// A builder for creating a button component in a message
 #[derive(Clone, Debug, Serialize, PartialEq)]
 #[must_use]

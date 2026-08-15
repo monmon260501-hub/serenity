@@ -11,7 +11,9 @@ use crate::builder::{
 #[cfg(feature = "model")]
 use crate::http::{CacheHttp, Http};
 use crate::internal::prelude::*;
+use crate::json::from_value;
 use crate::model::prelude::*;
+use crate::model::utils::deserialize_val;
 
 /// An interaction triggered by a modal submit.
 ///
@@ -217,11 +219,191 @@ impl Serialize for ModalInteraction {
 ///
 /// [Discord docs](https://docs.discord.com/developers/interactions/receiving-and-responding#interaction-object-modal-submit-data-structure).
 #[cfg_attr(feature = "typesize", derive(typesize::derive::TypeSize))]
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct ModalInteractionData {
     /// The custom id of the modal
     pub custom_id: String,
-    /// The components.
+    /// Legacy action row components.
+    ///
+    /// This remains populated for existing text-input modals for backwards compatibility.
     pub components: Vec<ActionRow>,
+    /// All top-level components in the submitted modal.
+    pub modal_components: Vec<ModalComponent>,
+    /// Resolved entities referenced by modal inputs, including uploaded attachments.
+    pub resolved: CommandDataResolved,
+}
+
+impl<'de> Deserialize<'de> for ModalInteractionData {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> StdResult<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Raw {
+            custom_id: String,
+            components: Vec<ModalComponent>,
+            #[serde(default)]
+            resolved: CommandDataResolved,
+        }
+
+        let raw = Raw::deserialize(deserializer)?;
+        let components = raw
+            .components
+            .iter()
+            .filter_map(|component| match component {
+                ModalComponent::ActionRow(row) => Some(row.clone()),
+                ModalComponent::Label(_) => None,
+            })
+            .collect();
+        Ok(Self {
+            custom_id: raw.custom_id,
+            components,
+            modal_components: raw.components,
+            resolved: raw.resolved,
+        })
+    }
+}
+
+impl Serialize for ModalInteractionData {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> StdResult<S::Ok, S::Error> {
+        #[derive(Serialize)]
+        struct Raw<'a> {
+            custom_id: &'a str,
+            components: Vec<ModalComponent>,
+            #[serde(skip_serializing_if = "resolved_is_empty")]
+            resolved: CommandDataResolved,
+        }
+
+        let components = if self.modal_components.is_empty() {
+            self.components.iter().cloned().map(ModalComponent::ActionRow).collect()
+        } else {
+            self.modal_components.clone()
+        };
+        Raw {
+            custom_id: &self.custom_id,
+            components,
+            resolved: self.resolved.clone(),
+        }
+        .serialize(serializer)
+    }
+}
+
+fn resolved_is_empty(resolved: &CommandDataResolved) -> bool {
+    resolved.users.is_empty()
+        && resolved.members.is_empty()
+        && resolved.roles.is_empty()
+        && resolved.channels.is_empty()
+        && resolved.messages.is_empty()
+        && resolved.attachments.is_empty()
+}
+
+/// A top-level component in a modal submission.
+#[cfg_attr(feature = "typesize", derive(typesize::derive::TypeSize))]
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub enum ModalComponent {
+    ActionRow(ActionRow),
+    Label(Label),
+}
+
+impl<'de> Deserialize<'de> for ModalComponent {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> StdResult<Self, D::Error> {
+        let map = JsonMap::deserialize(deserializer)?;
+        let raw_kind =
+            map.get("type").ok_or_else(|| serde::de::Error::missing_field("type"))?.clone();
+        let value = Value::from(map);
+
+        match deserialize_val(raw_kind)? {
+            ComponentType::ActionRow => from_value(value).map(Self::ActionRow),
+            ComponentType::Label => from_value(value).map(Self::Label),
+            ComponentType::Unknown(i) => {
+                return Err(serde::de::Error::custom(format_args!(
+                    "Unknown modal component type {i}"
+                )))
+            },
+            kind => {
+                return Err(serde::de::Error::custom(format_args!(
+                    "Invalid modal component {kind:?}"
+                )))
+            },
+        }
+        .map_err(serde::de::Error::custom)
+    }
+}
+
+impl Serialize for ModalComponent {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> StdResult<S::Ok, S::Error> {
+        match self {
+            Self::ActionRow(component) => component.serialize(serializer),
+            Self::Label(component) => component.serialize(serializer),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::json::{from_value, json};
+
+    #[test]
+    fn deserializes_legacy_action_row_without_breaking_existing_access() {
+        let data: ModalInteractionData = from_value(json!({
+            "custom_id": "legacy",
+            "components": [{
+                "type": 1,
+                "components": [{
+                    "type": 4,
+                    "custom_id": "name",
+                    "value": "Serenity"
+                }]
+            }]
+        }))
+        .unwrap();
+
+        assert_eq!(data.components.len(), 1);
+        assert_eq!(data.modal_components.len(), 1);
+        let ActionRowComponent::InputText(input) = &data.components[0].components[0] else {
+            panic!("expected legacy input text");
+        };
+        assert_eq!(input.value.as_deref(), Some("Serenity"));
+    }
+
+    #[test]
+    fn deserializes_file_upload_and_resolved_attachment() {
+        let data: ModalInteractionData = from_value(json!({
+            "custom_id": "upload",
+            "components": [{
+                "type": 18,
+                "id": 1,
+                "component": {
+                    "type": 19,
+                    "id": 2,
+                    "custom_id": "image",
+                    "values": ["42"]
+                }
+            }],
+            "resolved": {
+                "attachments": {
+                    "42": {
+                        "id": "42",
+                        "filename": "image.png",
+                        "proxy_url": "https://cdn.example/image.png",
+                        "size": 128,
+                        "url": "https://cdn.example/image.png",
+                        "content_type": "image/png"
+                    }
+                }
+            }
+        }))
+        .unwrap();
+
+        assert!(data.components.is_empty());
+        let ModalComponent::Label(label) = &data.modal_components[0] else {
+            panic!("expected label");
+        };
+        let LabelComponent::FileUpload(upload) = &label.component else {
+            panic!("expected file upload");
+        };
+        assert_eq!(upload.custom_id, "image");
+        assert_eq!(upload.values, [AttachmentId::new(42)]);
+        assert_eq!(data.resolved.attachments[&AttachmentId::new(42)].filename, "image.png");
+    }
 }

@@ -297,7 +297,10 @@ impl<'de> Deserialize<'de> for ComponentInteractionDataKind {
                 values: parse_values!(),
             },
             ComponentType::Unknown(x) => Self::Unknown(x),
-            x @ (ComponentType::ActionRow | ComponentType::InputText) => {
+            x @ (ComponentType::ActionRow
+            | ComponentType::InputText
+            | ComponentType::Label
+            | ComponentType::FileUpload) => {
                 return Err(D::Error::custom(format_args!(
                     "invalid message component type in this context: {x:?}",
                 )));

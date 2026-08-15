@@ -6,6 +6,7 @@ use super::{
     CreateAllowedMentions,
     CreateAttachment,
     CreateEmbed,
+    CreateLabel,
     CreatePoll,
     EditAttachments,
 };
@@ -431,7 +432,7 @@ impl Builder for CreateAutocompleteResponse {
 #[derive(Clone, Debug, Default, Serialize)]
 #[must_use]
 pub struct CreateModal {
-    components: Vec<CreateActionRow>,
+    components: Vec<CreateModalComponent>,
     custom_id: String,
     title: String,
 }
@@ -450,7 +451,83 @@ impl CreateModal {
     ///
     /// Overwrites existing components.
     pub fn components(mut self, components: Vec<CreateActionRow>) -> Self {
+        self.components = components.into_iter().map(CreateModalComponent::ActionRow).collect();
+        self
+    }
+
+    /// Sets top-level modal components, including labels containing file uploads.
+    ///
+    /// Overwrites existing components.
+    pub fn modal_components(mut self, components: Vec<CreateModalComponent>) -> Self {
         self.components = components;
         self
+    }
+}
+
+/// A top-level component that can be included in a modal.
+#[derive(Clone, Debug, Serialize)]
+#[must_use]
+#[serde(untagged)]
+pub enum CreateModalComponent {
+    /// A legacy action row. Existing modal builders continue to use this representation.
+    ActionRow(CreateActionRow),
+    /// A label wrapping a modal input such as a file upload.
+    Label(CreateLabel),
+}
+
+impl From<CreateActionRow> for CreateModalComponent {
+    fn from(component: CreateActionRow) -> Self {
+        Self::ActionRow(component)
+    }
+}
+
+impl From<CreateLabel> for CreateModalComponent {
+    fn from(component: CreateLabel) -> Self {
+        Self::Label(component)
+    }
+}
+
+#[cfg(test)]
+mod modal_component_tests {
+    use super::*;
+    use crate::json::{json, to_value};
+
+    #[test]
+    fn serializes_a_file_upload_inside_a_label() {
+        let response = CreateInteractionResponse::Modal(
+            CreateModal::new("upload", "Upload image").modal_components(vec![
+                CreateLabel::file_upload(
+                    "Image",
+                    super::super::CreateFileUpload::new("image")
+                        .file_types(vec!["image".to_string()]),
+                )
+                .description("PNG, JPEG, GIF, or WebP")
+                .into(),
+            ]),
+        );
+
+        assert_eq!(
+            to_value(response).unwrap(),
+            json!({
+                "type": 9,
+                "data": {
+                    "components": [{
+                        "type": 18,
+                        "label": "Image",
+                        "description": "PNG, JPEG, GIF, or WebP",
+                        "component": {
+                            "type": 19,
+                            "custom_id": "image",
+                            "min_values": 1,
+                            "max_values": 1,
+                            "required": true,
+                            "file_types": ["image"]
+                        }
+                    }],
+                    "custom_id": "upload",
+                    "title": "Upload image"
+                }
+            })
+        );
     }
 }
