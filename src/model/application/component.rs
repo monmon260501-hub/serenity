@@ -315,6 +315,7 @@ pub struct Label {
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub enum LabelComponent {
+    StringSelect(ModalStringSelect),
     InputText(InputText),
     FileUpload(FileUpload),
 }
@@ -326,6 +327,7 @@ impl<'de> Deserialize<'de> for LabelComponent {
         let value = Value::from(map);
 
         match deserialize_val(raw_kind)? {
+            ComponentType::StringSelect => from_value(value).map(Self::StringSelect),
             ComponentType::InputText => from_value(value).map(Self::InputText),
             ComponentType::FileUpload => from_value(value).map(Self::FileUpload),
             ComponentType::Unknown(i) => {
@@ -340,10 +342,25 @@ impl<'de> Deserialize<'de> for LabelComponent {
 impl Serialize for LabelComponent {
     fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
         match self {
+            Self::StringSelect(component) => component.serialize(serializer),
             Self::InputText(component) => component.serialize(serializer),
             Self::FileUpload(component) => component.serialize(serializer),
         }
     }
+}
+
+/// The selected string values returned by a modal's string select menu.
+#[cfg_attr(feature = "typesize", derive(typesize::derive::TypeSize))]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[non_exhaustive]
+pub struct ModalStringSelect {
+    /// Always ComponentType::StringSelect.
+    #[serde(rename = "type")]
+    pub kind: ComponentType,
+    /// Developer-defined identifier of the select menu.
+    pub custom_id: String,
+    /// Selected option values; empty for an unanswered optional select.
+    pub values: Vec<String>,
 }
 
 /// An interactive component that allows users to upload files in a modal.
@@ -412,5 +429,24 @@ mod tests {
             &button,
             json!({"type": 2, "style": 6, "sku_id": "1234965026943668316", "label": "a", "disabled": false}),
         );
+    }
+}
+
+#[cfg(test)]
+mod modal_select_tests {
+    use super::*;
+
+    #[test]
+    fn parses_modal_select_submissions_including_an_empty_selection() {
+        for values in [vec!["42"], vec![]] {
+            let json = serde_json::json!({"type":18,"component":{"type":3,"custom_id":"plan","values":values}});
+            let label: Label = serde_json::from_value(json.clone()).unwrap();
+            let LabelComponent::StringSelect(select) = &label.component else {
+                panic!("expected string select");
+            };
+            assert_eq!(select.custom_id, "plan");
+            assert_eq!(select.values, values);
+            assert_eq!(serde_json::to_value(label).unwrap(), json);
+        }
     }
 }

@@ -46,6 +46,16 @@ pub struct CreateLabel {
 }
 
 impl CreateLabel {
+    /// Creates a label containing a string select menu for a modal.
+    pub fn select_menu(label: impl Into<String>, select_menu: CreateSelectMenu) -> Self {
+        Self {
+            kind: ComponentType::Label,
+            label: label.into(),
+            description: None,
+            component: CreateLabelComponent::SelectMenu(select_menu),
+        }
+    }
+
     /// Creates a label containing a file upload component.
     pub fn file_upload(label: impl Into<String>, file_upload: CreateFileUpload) -> Self {
         Self {
@@ -66,6 +76,7 @@ impl CreateLabel {
 #[derive(Clone, Debug, Serialize)]
 #[serde(untagged)]
 enum CreateLabelComponent {
+    SelectMenu(CreateSelectMenu),
     FileUpload(CreateFileUpload),
 }
 
@@ -333,9 +344,17 @@ pub struct CreateSelectMenu {
 
     #[serde(flatten)]
     kind: CreateSelectMenuKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    required: Option<bool>,
 }
 
 impl CreateSelectMenu {
+    /// Sets whether a select in a modal must be answered. Omitted for message menus.
+    pub fn required(mut self, required: bool) -> Self {
+        self.required = Some(required);
+        self
+    }
+
     /// Creates a builder with given custom id (a developer-defined identifier), and a list of
     /// options, leaving all other fields empty.
     pub fn new(custom_id: impl Into<String>, kind: CreateSelectMenuKind) -> Self {
@@ -345,6 +364,7 @@ impl CreateSelectMenu {
             min_values: None,
             max_values: None,
             disabled: None,
+            required: None,
             kind,
         }
     }
@@ -518,5 +538,38 @@ impl CreateInputText {
     pub fn required(mut self, required: bool) -> Self {
         self.0.required = required;
         self
+    }
+}
+
+#[cfg(test)]
+mod modal_select_tests {
+    use super::*;
+
+    #[test]
+    fn optional_modal_select_preserves_default_options() {
+        let select = CreateSelectMenu::new(
+            "plan",
+            CreateSelectMenuKind::String {
+                options: vec![
+                    CreateSelectMenuOption::new("Composition", "42").default_selection(true)
+                ],
+            },
+        )
+        .min_values(0)
+        .max_values(1)
+        .required(false);
+        let value = serde_json::to_value(CreateLabel::select_menu("Plan", select)).unwrap();
+        assert_eq!(value["type"], 18);
+        assert_eq!(value["component"]["type"], 3);
+        assert_eq!(value["component"]["required"], false);
+        assert_eq!(value["component"]["options"][0]["default"], true);
+        assert!(value["component"].get("disabled").is_none());
+    }
+
+    #[test]
+    fn message_select_does_not_send_modal_required_field() {
+        let select =
+            CreateSelectMenu::new("plan", CreateSelectMenuKind::String { options: vec![] });
+        assert!(serde_json::to_value(select).unwrap().get("required").is_none());
     }
 }
